@@ -1,9 +1,9 @@
 /* ranges:
-	un range è un oggetto che contiene un iteratore (begin) e un sentinel (end)
+	un range ï¿½ un oggetto che contiene un iteratore (begin) e un sentinel (end)
 lower_bound, upper_bound:
-	algoritmi di ricerca binaria, ritornano il primo e l'ultimo elemento con valore definito, complessintà o(n)
+	algoritmi di ricerca binaria, ritornano il primo e l'ultimo elemento con valore definito, complessitï¿½ o(n)
 resize vs reserve:
-	resize realloca lo spazio per n cose e setta la dimensione
+	resize realloca lo spazio per n cose, se e solo se la nuova dimensione > della capacitÃ  corrente (impostata con reserve) e setta la dimensione
 	reserve riserva dello spazio per n cose preallocandolo ma non modifica la dimensione
 	reserve viene utilizzato per ottimizzare cicli di allocazioni */
 
@@ -34,17 +34,17 @@ void check_open(const T& stream, const std::string& filename) {
 }
 
 class bitreader {
-	uint8_t buffer_;	/*Questo è un buffer che memorizza un byte (8 bit) di dati letti dal flusso di input.
+	uint8_t buffer_;	/*Questo ï¿½ un buffer che memorizza un byte (8 bit) di dati letti dal flusso di input.
 						Serve come riserva temporanea per estrarre singoli bit*/
 	size_t n_ = 0;	/*Questo contatore tiene traccia di quanti bit rimangono nel buffer buffer_ da leggere.
-					Inizialmente è impostato a 0, indicando che nessun bit è stato letto*/
-	std::istream& is_;	/*Un riferimento a un flusso di input (std::istream) da cui vengono letti i dati. Questo è il flusso da cui i bit verranno estratti*/
+					Inizialmente ï¿½ impostato a 0, indicando che nessun bit ï¿½ stato letto*/
+	std::istream& is_;	/*Un riferimento a un flusso di input (std::istream) da cui vengono letti i dati. Questo ï¿½ il flusso da cui i bit verranno estratti*/
 	uint64_t readbit() {
 		/*Questo metodo legge un singolo bit dal buffer.
 		Se non ci sono bit disponibili (n_ == 0), viene letto un nuovo byte dal flusso di input e memorizzato in buffer_.
 		Il contatore n_ viene quindi impostato a 8.
 		Ogni volta che viene letto un bit, n_ viene decrementato.
-		Il metodo ritorna il bit più significativo disponibile in buffer_ spostato a destra della quantità necessaria per isolare il bit desiderato.*/
+		Il metodo ritorna il bit piï¿½ significativo disponibile in buffer_ spostato a destra della quantitï¿½ necessaria per isolare il bit desiderato.*/
 		if (n_ == 0) {
 			buffer_ = is_.get();
 			n_ = 8;
@@ -72,7 +72,7 @@ public:
 	}
 };
 class bitwriter {
-	uint8_t buffer_;	/*Questo è un buffer che accumula i bit scritti finché non viene riempito un byte completo (8 bit)*/
+	uint8_t buffer_;	/*Questo ï¿½ un buffer che accumula i bit scritti finchï¿½ non viene riempito un byte completo (8 bit)*/
 	size_t n_ = 0;	/*Questo contatore tiene traccia di quanti bit sono stati scritti nel buffer.
 					Quando raggiunge 8, il buffer viene svuotato nel flusso di output*/
 	std::ostream& os_;	/*Un riferimento a un flusso di output (std::ostream) in cui i dati vengono scritti*/
@@ -80,7 +80,7 @@ class bitwriter {
 		/*Questo metodo scrive un singolo bit nel buffer.
 		Il bit corrente curbit viene aggiunto al buffer spostando il buffer di un bit a sinistra e concatenando il bit corrente con un'operazione OR.
 		Il contatore n_ viene incrementato di 1.
-		Se il buffer ha accumulato 8 bit (cioè un byte completo), il byte viene scritto nel flusso di output os_ e n_ viene reimpostato a 0*/
+		Se il buffer ha accumulato 8 bit (cioï¿½ un byte completo), il byte viene scritto nel flusso di output os_ e n_ viene reimpostato a 0*/
 		buffer_ = (buffer_ << 1) | (curbit & 1);
 		++n_;
 		if (n_ == 8) {
@@ -97,7 +97,7 @@ public:
 	}
 	std::ostream& operator()(uint64_t source, uint64_t numbits) {	
 		/*Questo operatore funzione scrive numbits bit dal valore source nel flusso di output.
-		La funzione itera su ogni bit, partendo dal bit più significativo (MSB), e chiama writebit() per scriverlo nel buffer*/
+		La funzione itera su ogni bit, partendo dal bit piï¿½ significativo (MSB), e chiama writebit() per scriverlo nel buffer*/
 		while (numbits-- > 0) {
 			writebit(source >> numbits);
 		}
@@ -111,9 +111,9 @@ public:
 	}
 	std::ostream& flush(int padbit=0) {
 		/*Questo metodo svuota il buffer, scrivendo eventuali bit rimanenti nel flusso di output.
-		Se il buffer non è pieno (cioè n_ non è 0), viene riempito con padbit (che è 0 per default) fino a completare il byte. 
-		Questo è necessario per garantire che tutti i bit accumulati siano scritti nel flusso.
-		Dopo che il buffer è stato svuotato, il metodo restituisce il flusso di output os_*/
+		Se il buffer non ï¿½ pieno (cioï¿½ n_ non ï¿½ 0), viene riempito con padbit (che ï¿½ 0 per default) fino a completare il byte. 
+		Questo ï¿½ necessario per garantire che tutti i bit accumulati siano scritti nel flusso.
+		Dopo che il buffer ï¿½ stato svuotato, il metodo restituisce il flusso di output os_*/
 		while (n_ > 0) {
 			writebit(padbit);
 		}
