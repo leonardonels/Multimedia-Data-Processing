@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <queue>
+#include <string>
 
 template<typename T>
 struct frequency {
@@ -133,6 +134,23 @@ int main()
 	// least significant bits of _code are the Huffman code.
 	
 	// TODO
+	// I'm lazy so I won't compress the table.bin file by 3 bits for each elem.
+	std::ofstream os("table.bin", std::ios::binary);
+	if(!os)
+		exit(1);
+
+	const std::string MAGICNUMBER = "HUFFMANSTRINGTABLE";
+	for(size_t i = 0; i < 18; i++){
+		os.put(MAGICNUMBER[i]);
+	}
+	
+	// By design the table has an elem for each one of the 256 symbols
+	// Meaning that there is no reason to save inside the bin the number of elements to read
+
+	for(auto elem : huff.table()){
+		os.put(elem._sym);
+		os.put(elem._len);
+	}
 
 	return EXIT_SUCCESS;
 }
