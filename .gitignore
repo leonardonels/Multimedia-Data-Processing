@@ -1,7 +1,10 @@
 *
 !*.*
 *.json
+*.html
 *.txt
 *.bin
 *.pbm
+*.bmp
+*.pam
 !*/
