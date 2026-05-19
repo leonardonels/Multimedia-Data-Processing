@@ -1,10 +1,17 @@
 *
 !*.*
+
 *.json
 *.html
 *.txt
+
 *.bin
+
 *.pbm
 *.bmp
 *.pam
+
+*.raw
+!test.raw
+
 !*/
