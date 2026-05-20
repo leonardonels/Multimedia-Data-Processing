@@ -10,6 +10,10 @@
 *.pbm
 *.bmp
 *.pam
+*.wav
+
+*.qoa
+!toms-diner.qoa
 
 *.raw
 !test.raw
