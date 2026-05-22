@@ -15,6 +15,9 @@
 *.qoa
 !toms-diner.qoa
 
+*.qoi
+!testcard_rgba.qoi
+
 *.raw
 !test.raw
 
