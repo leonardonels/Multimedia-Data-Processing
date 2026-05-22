@@ -163,8 +163,7 @@ void write_img(qoi_header header, vector<pixel>& pixel, ofstream& os)
     }
     os.write("\nDEPTH 4", 8);
     os.write("\nMAXVAL 255", 11);
-    os.write("\nTUPLTYPE", 9);
-    os.write("\nRGB_ALPHA", 10);
+    os.write("\nTUPLTYPE RGB_ALPHA", 19);
     os.write("\nENDHDR\n", 8);
     
     for(auto p : pixel){
