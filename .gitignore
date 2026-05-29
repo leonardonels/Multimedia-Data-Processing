@@ -11,6 +11,11 @@
 *.bmp
 *.pam
 *.wav
+*.ppm
+
+*.pgm
+!D5100LL004003.pgm
+!small.pgm
 
 *.qoa
 !toms-diner.qoa
