@@ -261,6 +261,465 @@ template<class T>
 void check_open(const T& s, const std::string& f) { if (!s) error("cannot open " + f); }
 ```
 
+---
+
+## Quick implementation recipes (Huffman, PackBits, LZ77, LZ78, LZW)
+
+These are compact implementation checklists for the most-requested coding
+schemes in this course. They are designed to map directly to the style of this
+repository: simple streams, explicit data structures, deterministic output.
+
+### Huffman (static, canonical)
+
+**Bit I/O fundamentals** (from [huffman4.cpp](src/data/Huffman/huffman4.cpp)):
+
+LSB-first `BitWriter` and `BitReader`:
+
+```cpp
+class BitWriter {
+    ostream& os_;
+    uint64_t buffer_ = 0;
+    size_t bits_ = 0;
+public:
+    BitWriter(ostream& os) : os_(os) {}
+    void write_bits(uint32_t val, size_t size = 1) {
+        buffer_ |= (uint64_t)(val & ((1ull << size) - 1)) << bits_;
+        bits_ += size;
+        while (bits_ >= 8) {
+            os_.put((char)(buffer_ & 0xFF));
+            buffer_ >>= 8;
+            bits_ -= 8;
+        }
+    }
+    void flush() { if (bits_ > 0) { os_.put((char)(buffer_ & 0xFF)); buffer_ = 0; bits_ = 0; } }
+    ~BitWriter() { flush(); }
+};
+
+class BitReader {
+    istream& is_;
+    uint64_t buffer_ = 0;
+    size_t bits_ = 0;
+public:
+    BitReader(istream& is) : is_(is) {}
+    uint32_t read_bits(size_t size = 1) {
+        while (bits_ < size) {
+            buffer_ |= (uint64_t)(is_.get()) << bits_;
+            bits_ += 8;
+        }
+        uint32_t val = buffer_ & ((1ull << size) - 1);
+        buffer_ >>= size;
+        bits_ -= size;
+        return val;
+    }
+};
+```
+
+**Tree building** (min-heap by frequency):
+
+```cpp
+struct node {
+    uint8_t symbol_;
+    uint32_t frequency_;
+    node* left_, *right_;
+    node(uint8_t sym, uint32_t freq) : symbol_(sym), frequency_(freq), left_(nullptr), right_(nullptr) {}
+    node(node* l, node* r) : symbol_(0), frequency_(l->frequency_ + r->frequency_), left_(l), right_(r) {}
+};
+
+struct freq_cmp {
+    bool operator()(const node* a, const node* b) const { return a->frequency_ > b->frequency_; }
+};
+
+node* build_tree(unordered_map<uint8_t, uint32_t>& freq) {
+    priority_queue<node*, vector<node*>, freq_cmp> pq;
+    for (const auto& [sym, f] : freq) pq.push(new node(sym, f));
+    if (pq.size() == 1) return new node(pq.top(), nullptr);
+    while (pq.size() > 1) {
+        node* a = pq.top(); pq.pop();
+        node* b = pq.top(); pq.pop();
+        pq.push(new node(a, b));
+    }
+    return pq.top();
+}
+```
+
+**Canonical code generation**:
+
+```cpp
+// Convert lengths to canonical codes: assign increasing integers, left-shift on length change
+unordered_map<uint64_t, uint8_t> build_table(priority_queue<canonical_code*,...>& codes) {
+    unordered_map<uint64_t, uint8_t> table;
+    bool first_code = true;
+    uint8_t prev_len = 0;
+    uint32_t prev_code = 0;
+    while (codes.size() > 0) {
+        canonical_code* entry = codes.top(); codes.pop();
+        uint32_t code = first_code ? 0 : (prev_code + 1) << (entry->len_ - prev_len);
+        table[make_key(entry->len_, code)] = entry->sym_;
+        prev_len = entry->len_;
+        prev_code = code;
+        first_code = false;
+    }
+    return table;
+}
+```
+
+**Decoding**:
+
+```cpp
+// Read table from header, then decode symbols bit-by-bit
+unordered_map<uint64_t, uint8_t> table = read_table(br);
+uint32_t n = br.read_bits(8)<<24 | br.read_bits(8)<<16 | br.read_bits(8)<<8 | br.read_bits(8);
+uint64_t c = 0;
+uint8_t len = 0;
+while (n > 0) {
+    c = (c << 1) | br.read_bits(1);
+    len++;
+    auto it = table.find(make_key(len, c));
+    if (it != table.end()) {
+        os_.put((char)it->second);
+        n--;
+        c = 0; len = 0;
+    }
+}
+```
+
+See [huffman4.cpp](src/data/Huffman/huffman4.cpp) for full encode/decode workflow.
+
+### PackBits (RLE)
+
+Real encoder and decoder from [packbits.cpp](src/data/packbits/packbits.cpp):
+
+**Encoder** (state machine with RUN/COPY modes):
+
+```cpp
+class packbits_encoder {
+    char last_;
+    size_t cnt_;
+    bool mode_;                                  // RUN (1) or COPY (0)
+    std::vector<char> chars_;
+    std::istream& is_;
+    std::ostream& os_;
+
+    void write_run(size_t length) {
+        if (length < 2) return;
+        char n = 257 - static_cast<char>(length);  // encode as 129-255
+        os_.put(n);
+        os_.put(last_);
+    }
+    void write_copy(size_t length) {
+        if (length < 1) return;
+        os_.put(static_cast<char>(length - 1));     // encode as 0-127
+        for (const auto& c : chars_) os_.put(c);
+    }
+    void write_end() { os_.put(128); }              // EOF marker
+public:
+    packbits_encoder(std::istream& is, std::ostream& os) : is_(is), os_(os) {}
+    void operator()() {
+        char read;
+        is_.get(read);
+        chars_.push_back(read);
+        last_ = read;
+        cnt_ = 1;
+        mode_ = 0;  // COPY
+
+        while (is_.get(read)) {
+            if (read == last_) {
+                if (mode_ == 1) {                   // in RUN: extend it
+                    cnt_++;
+                    if (cnt_ == 128) { write_run(cnt_); /* reset */ }
+                } else {                            // in COPY: switch to RUN
+                    if (!chars_.empty()) chars_.pop_back();
+                    write_copy(cnt_ - 1);
+                    cnt_ = 2;
+                    mode_ = 1;
+                }
+            } else {                                // read != last_
+                if (mode_ == 1) {                   // in RUN: emit it
+                    write_run(cnt_);
+                    chars_.push_back(read);
+                    last_ = read;
+                    cnt_ = 1;
+                    mode_ = 0;
+                } else {                            // in COPY: accumulate
+                    if (cnt_ == 128) { write_copy(cnt_); cnt_ = 0; }
+                    chars_.push_back(read);
+                    last_ = read;
+                    cnt_++;
+                }
+            }
+        }
+        if (mode_ == 1) write_run(cnt_);
+        else write_copy(cnt_);
+        write_end();
+    }
+};
+```
+
+**Decoder** (plain block-by-block):
+
+```cpp
+class packbits_decoder {
+    std::istream& is_;
+    std::ostream& os_;
+public:
+    packbits_decoder(std::istream& is, std::ostream& os) : is_(is), os_(os) {}
+    void operator()() {
+        char byte;
+        while (is_.get(byte)) {
+            if (static_cast<uint8_t>(byte) == 128) {
+                break;                              // EOF
+            } else if (static_cast<uint8_t>(byte) < 128) {
+                // COPY: next n+1 literals
+                uint16_t n = static_cast<uint8_t>(byte) + 1;
+                for (size_t i = 0; i < n; ++i) {
+                    is_.get(byte);
+                    os_.put(byte);
+                }
+            } else {
+                // RUN: repeat next byte (257-n) times
+                uint16_t n = 257 - static_cast<uint8_t>(byte);
+                is_.get(byte);
+                for (size_t i = 0; i < n; ++i) os_.put(byte);
+            }
+        }
+    }
+};
+```
+
+Practical notes:
+- Encoder detects runs ≥ 2 bytes and uses COPY mode for isolated bytes.
+- Blocks limited to 128 bytes to fit in signed byte encoding.
+- EOF marker (128) is mandatory.
+
+### LZ77 (sliding window)
+
+Real LZ77 decoder from [LZ77/main.cpp](src/data/LZ77/main.cpp) (PalmDOC format):
+
+Token structure: `(first_byte, second_byte)` encodes offset and length.
+
+```cpp
+uint8_t LZ77(char first, char second, std::ifstream& is, std::ofstream& os) {
+    // Extract offset and length from token pair
+    uint16_t distance;
+    uint8_t length = second & 7;           // bits 0-2 = length - 3
+    length += 3;
+
+    distance = first & 63;                 // bits 0-5 of first byte
+    distance = distance << 5;
+    distance |= ((second >> 3) & 31);      // bits 3-7 of second byte
+
+    size_t start_pos = os_pos - distance;  // match source in history buffer
+    for (size_t i = 0; i < length; ++i) {
+        char byte = output_buffer[start_pos + i];
+        os_.put(byte);
+        output_buffer.push_back(byte);     // append to history (supports overlap)
+    }
+    return 1;
+}
+```
+
+**Key features**:
+- Distance points to past bytes in output buffer (supports overlapping copy for repeated patterns).
+- Length + offset must fit within token bytes — typical is 3–10 bytes length, 1–2048 distance.
+- Decoding is simple: copy from `current_pos - offset` for `length` bytes.
+
+See [LZ77/main.cpp](src/data/LZ77/main.cpp) for full PalmDOC/Mobi decoder with header parsing.
+
+### LZ78 (dictionary of phrases)
+
+Real encoder from [LZ78/lz78encode.cpp](src/data/LZ78/lz78encode.cpp):
+
+Token is `(dict_idx, next_char)` where index points to an existing phrase.
+
+**Bit I/O (MSB-first)**:
+
+```cpp
+class bitwriter {
+    uint8_t buffer_;
+    size_t bits_;
+    ofstream& os_;
+public:
+    bitwriter(ofstream& os) : buffer_(0), bits_(0), os_(os) {}
+    ~bitwriter() {
+        if (bits_ > 0) {
+            buffer_ <<= (8 - bits_);
+            os_.put(static_cast<char>(buffer_));
+        }
+    }
+    void bitwrite(uint8_t val, size_t n) {
+        for (size_t i = 0; i < n; ++i) {
+            buffer_ <<= 1;
+            buffer_ |= (val >> (n - i - 1)) & 1;
+            bits_++;
+            if (bits_ == 8) {
+                os_.put(static_cast<char>(buffer_));
+                buffer_ = 0; bits_ = 0;
+            }
+        }
+    }
+};
+```
+
+**Encoder main loop**:
+
+```cpp
+bool lz78encode(const string& input_file, const string& output_file, int maxbits) {
+    ifstream is(input_file, ios::binary);
+    ofstream os(output_file, ios::binary);
+    bitwriter bw(os);
+    
+    os.write("LZ78", 4);                          // magic number
+    bw.bitwrite(maxbits, 5);                      // variable code width
+
+    string phrase = "";
+    size_t dict_size = 0;
+    map<string, uint8_t> dict;
+    char c;
+    
+    while (is >> c) {
+        string next = phrase + c;
+        if (dict_size >= (1u << maxbits)) {
+            dict.clear();                          // clear dictionary on overflow
+            dict_size = 0;
+        }
+        if (dict.find(next) == dict.end()) {
+            bw.bitwrite(dict[phrase], dict_size);  // emit index of current phrase
+            bw.bitwrite((uint8_t)c, 8);            // emit next byte
+            dict[next] = ++dict_size;               // add new phrase to dict
+            phrase = "";
+        } else {
+            phrase = next;                          // extend phrase
+        }
+    }
+    if (phrase != "") {
+        bw.bitwrite(dict[phrase], dict_size);      // emit final phrase
+        bw.bitwrite(0, 8);                         // emit zero byte
+    }
+    return true;
+}
+```
+
+**Decoder**:
+- Initialize dict with empty phrase at index 0.
+- For each `(index, char)` token: reconstruct `phrase = dict[index] + char`, output it, add it to dict.
+
+Practical notes:
+- Code width `maxbits` determines dictionary max size: $2^{maxbits}$ entries.
+- Clearing dictionary when full prevents unbounded growth.
+- Variable-width encoding (9-12 bits common in real formats) improves compression.
+
+### LZW (dictionary without explicit `next_char`)
+
+LZW starts with a pre-filled dictionary (all single-byte symbols) and outputs only codewords. Unlike LZ78, the "next byte" is implicit in the dictionary lookup.
+
+**Encoder** (typical fixed 12-bit codes):
+
+```cpp
+class lzw_encoder {
+    unordered_map<string, uint16_t> dict;
+    uint16_t next_code = 256;
+    const uint16_t MAX_CODE = (1 << 12) - 1;
+public:
+    lzw_encoder() {
+        for (int i = 0; i < 256; ++i) {
+            dict[string(1, (char)i)] = i;
+        }
+    }
+    void encode(ifstream& is, ofstream& os) {
+        string w = "";
+        char c;
+        while (is.get(c)) {
+            string wc = w + c;
+            if (dict.find(wc) != dict.end()) {
+                w = wc;
+            } else {
+                os.put((char)(dict[w] >> 8));       // output code for w
+                os.put((char)(dict[w] & 0xFF));
+                if (next_code < MAX_CODE) {
+                    dict[wc] = next_code++;          // add w+c to dictionary
+                }
+                w = string(1, c);
+            }
+        }
+        // Emit final code
+        os.put((char)(dict[w] >> 8));
+        os.put((char)(dict[w] & 0xFF));
+    }
+};
+```
+
+**Decoder** (the critical `k == next_code` case):
+
+```cpp
+class lzw_decoder {
+    unordered_map<uint16_t, string> dict;
+    uint16_t next_code = 256;
+    const uint16_t MAX_CODE = (1 << 12) - 1;
+public:
+    lzw_decoder() {
+        for (int i = 0; i < 256; ++i) {
+            dict[i] = string(1, (char)i);
+        }
+    }
+    void decode(ifstream& is, ofstream& os) {
+        uint8_t b1, b2;
+        is.read((char*)&b1, 1);
+        is.read((char*)&b2, 1);
+        uint16_t k = (b1 << 8) | b2;
+        string w = dict[k];
+        os << w;
+        
+        while (is.read((char*)&b1, 1) && is.read((char*)&b2, 1)) {
+            k = (b1 << 8) | b2;
+            string entry;
+            
+            if (dict.find(k) != dict.end()) {
+                entry = dict[k];
+            } else if (k == next_code) {
+                // SPECIAL CASE: code not yet in dict
+                // This happens when encoder emitted a code it just added
+                entry = w + w[0];
+            } else {
+                cerr << "Invalid LZW code: " << k << endl;
+                return;
+            }
+            
+            os << entry;
+            
+            // Add w + entry[0] to dictionary
+            if (next_code < MAX_CODE) {
+                dict[next_code] = w + entry[0];
+                next_code++;
+            }
+            w = entry;
+        }
+    }
+};
+```
+
+**Key insight — the `k == next_code` case:**
+
+When the encoder encounters a phrase `w+c` that doesn't exist in its dictionary yet, it outputs `code(w)` and then adds `w+c` to the dictionary with `code = next_code`. On the next iteration, if the input matches that new phrase, the encoder outputs the code *before* the decoder has added it.
+
+Example: If dict size is 258 and encoder emits code 258, the decoder must handle receiving 258 on the next read before it has inserted 258 into its dictionary.
+
+**Practical notes:**
+- Real formats (GIF, TIFF) use variable widths (9→12 bits) and a CLEAR code (256 in GIF) to reset dictionary.
+- This algorithm is fast and simple but less effective than Huffman+LZ77 for modern data.
+- See [GIF spec](https://www.w3.org/Graphics/GIF/spec-gif89a.txt) for production-ready LZW with clear codes and end markers.
+
+### Suggested progression in this repo
+
+If you want to implement these from scratch in increasing difficulty:
+
+1. `packbits` (byte-level, simplest tokenization)
+2. `Huffman` (tree/canonical + bit I/O)
+3. `LZ77` (windowed search + overlap-safe copy)
+4. `LZ78` (explicit dictionary phrases)
+5. `LZW` (implicit phrase growth + variable-width codewords)
+
+This order minimizes moving parts per step and reuses previously built helpers.
+
 Newer additions instead use `exit(n)` with bare numeric codes for a faster debug process. Both styles are fine.
 
 ### 4. Encoder/decoder as a functor class
