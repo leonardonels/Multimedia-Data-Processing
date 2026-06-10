@@ -32,14 +32,6 @@ few) `.cpp`/`.h` source files, the format specification (PDF/HTML), and sample
 input/output data. There is no top-level build system — you compile one program
 at a time (see below).
 
-> **Why a single `src/` with four sub-folders?** It keeps the repository root to
-> three meaningful entries (`src/`, `.gitignore`, `README.md`) and makes the
-> course's four domains the first thing you see. The trade-off is one extra path
-> segment when you open a file; in exchange, related exercises sit next to each
-> other and the root stops being a wall of 30 folders. The VS Code build task is
-> path-independent (it builds whatever file is active), so nothing in the
-> workflow changes after the move.
-
 ---
 
 ## Index of exercises
@@ -155,9 +147,7 @@ int main(int argc, char* argv[]) {
 ```
 
 Because the VS Code task passes `-DDEBUG`, you can hit run/debug with **no
-arguments** and the program uses hard-coded paths. A release build (no `-DDEBUG`)
-requires real CLI arguments. When you reuse a program, **check and update those
-hard-coded paths** (a few still point at old `~/Downloads/...` locations).
+arguments** and the program uses hard-coded paths (a few still point at old `~/Downloads/...` locations). A release build (no `-DDEBUG`) requires real CLI arguments.
 
 ---
 
@@ -168,26 +158,78 @@ These recur across nearly every exercise; recognising them is most of the course
 ### 1. Bit I/O — `BitReader` / `BitWriter`
 
 Codecs that aren't byte-aligned (Huffman, Elias, LZ78, WebP, LZ4) carry a tiny
-bit-buffer class. Two conventions appear, differing only in **bit order**:
+bit-buffer class. **Two conventions appear, differing only in bit order** — pick
+one and keep the reader and writer of the same stream consistent, or the bytes
+come out scrambled. Both live in this repo (`huffman4` is LSB-first; QOI-style
+byte assembly is MSB-first).
+
+**LSB-first** — first bit written lands in the *least* significant position of
+the current byte. Used by LZ4/DEFLATE-style streams.
 
 ```cpp
-class BitWriter {
+class BitWriter {                                  // LSB-first
     ostream& os_; uint64_t buffer_ = 0; size_t bits_ = 0;
 public:
+    BitWriter(ostream& os) : os_(os) {}
     void write_bits(uint32_t val, size_t n = 1) {
-        buffer_ |= (uint64_t)(val & ((1ull<<n)-1)) << bits_;   // LSB-first here
+        buffer_ |= (uint64_t)(val & ((1ull<<n)-1)) << bits_;   // append above existing bits
         bits_ += n;
         while (bits_ >= 8) { os_.put(char(buffer_ & 0xFF)); buffer_ >>= 8; bits_ -= 8; }
     }
     void flush() { if (bits_) { os_.put(char(buffer_ & 0xFF)); buffer_ = 0; bits_ = 0; } }
     ~BitWriter() { flush(); }   // flushing in the destructor is the key idiom
 };
+
+class BitReader {                                  // LSB-first (mirrors the writer above)
+    istream& is_; uint64_t buffer_ = 0; size_t bits_ = 0;
+public:
+    BitReader(istream& is) : is_(is) {}
+    uint32_t read_bits(size_t n = 1) {
+        while (bits_ < n) { buffer_ |= (uint64_t)(is_.get() & 0xFF) << bits_; bits_ += 8; }
+        uint32_t val = buffer_ & ((1ull<<n)-1);    // take from the bottom
+        buffer_ >>= n; bits_ -= n;
+        return val;
+    }
+};
 ```
 
-`BitReader::read_bits(n)` mirrors it: pull whole bytes into a buffer until it
-holds ≥ `n` bits, then mask off `n`. **Watch the bit order** — MSB-first
-(Huffman codes, big-endian formats) vs LSB-first (LZ4/DEFLATE-style) — getting
-it backwards is the classic bug.
+**MSB-first** — first bit written lands in the *most* significant position.
+This is the natural order for Huffman codes and big-endian formats: the bits
+read out in the same left-to-right order you wrote them.
+
+```cpp
+class BitWriter {                                  // MSB-first
+    ostream& os_; uint8_t buffer_ = 0; size_t bits_ = 0;
+public:
+    BitWriter(ostream& os) : os_(os) {}
+    void write_bits(uint32_t val, size_t n = 1) {
+        for (size_t i = n; i-- > 0; ) {            // emit the high bit of val first
+            buffer_ = (buffer_ << 1) | ((val >> i) & 1);
+            if (++bits_ == 8) { os_.put(char(buffer_)); buffer_ = 0; bits_ = 0; }
+        }
+    }
+    void flush() { if (bits_) { os_.put(char(buffer_ << (8 - bits_))); buffer_ = 0; bits_ = 0; } }
+    ~BitWriter() { flush(); }
+};
+
+class BitReader {                                  // MSB-first (mirrors the writer above)
+    istream& is_; uint8_t buffer_ = 0; size_t bits_ = 0;
+public:
+    BitReader(istream& is) : is_(is) {}
+    uint32_t read_bits(size_t n = 1) {
+        uint32_t val = 0;
+        for (size_t i = 0; i < n; ++i) {
+            if (bits_ == 0) { buffer_ = is_.get(); bits_ = 8; }
+            val = (val << 1) | ((buffer_ >> (bits_ - 1)) & 1);   // take the top remaining bit
+            --bits_;
+        }
+        return val;
+    }
+};
+```
+
+Getting the order backwards (reading MSB-first what you wrote LSB-first) is the
+classic bit-I/O bug — the file looks valid but decodes to garbage.
 
 ### 2. Byte-level binary I/O & endianness
 
@@ -219,8 +261,7 @@ template<class T>
 void check_open(const T& s, const std::string& f) { if (!s) error("cannot open " + f); }
 ```
 
-The newer files instead `exit(n)` with bare numeric codes. Both styles are fine;
-pick one per program and stay consistent.
+Newer additions instead use `exit(n)` with bare numeric codes for a faster debug process. Both styles are fine.
 
 ### 4. Encoder/decoder as a functor class
 
@@ -278,8 +319,8 @@ Used to compare raw vs quantized vs transformed signals (see `MDCT`,
 structured bindings (`for (auto [k,v] : map)`), `std::clamp`, `<bit>`,
 `std::format`, `string_view`, `constexpr` lookup tables (LZVN's 256-entry opcode
 table, WebP's distance table). Target is **C++23**. `using namespace std;`
-appears in the newer files and `std::`-qualification in the older ones — both
-exist in the tree.
+is also more common in newer exams — it's just faster to type, but can
+occasionally incur small naming conflicts.
 
 ---
 
@@ -352,6 +393,3 @@ bytes/bits ──▶ entropy (H = −Σ p·log₂p)  ──▶  why compression 
      └─ Video ................. YUV4MPEG2, YCbCr→RGB              → src/video
 ```
 
-The thread running through all four domains: estimate redundancy → remove it
-with a predictor/transform/dictionary → entropy-code what's left → write a
-well-defined container around it. Every exercise is one slice of that pipeline.
